@@ -192,64 +192,55 @@ uint64_t z_nrf_rtc_timer_get_ticks(k_timeout_t t)
  *
  * @param[in] abs_val An absolute value of CC register to be set.
  *
- * @param[in] safe_set Determines whether new CC value can be set without
- *  protection from setting a value in the past or too close in the future.
- *
  * @returns CC value that was actually set. It is equal to @p abs_val or
  *  shifted ahead if @p abs_val was too near in the future (+1 case).
  */
-static uint32_t set_absolute_alarm(int32_t chan, uint32_t abs_val,
-				   bool safe_set)
+static uint32_t set_absolute_alarm(int32_t chan, uint32_t abs_val)
 {
 	uint32_t now;
 	uint32_t now2;
 	uint32_t cc_val = abs_val & COUNTER_MAX;
+	uint32_t prev_cc = get_comparator(chan);
 
-	if (safe_set) {
-		/* Provided CC value is guaranteed to be safely settable even
-		 * if this context gets preempted.
+	do {
+		now = counter();
+
+		/* Handle case when previous event may generate an event.
+		 * It is handled by setting CC to now (far in the future),
+		 * in case previous event was set for next tick wait for half
+		 * LF tick and clear event that may have been generated.
 		 */
+		set_comparator(chan, now);
+		if (counter_sub(prev_cc, now) == 1) {
+			/* It should wait for half of RTC tick 15.26us. As
+			 * busy wait runs from different clock source thus
+			 * wait longer to cover for discrepancy.
+			 */
+			k_busy_wait(19);
+		}
+
+		/* If requested cc_val is in the past or next tick, set to 2
+		 * ticks from now. RTC may not generate event if CC is set for
+		 * 1 tick from now.
+		 */
+		if (counter_sub(cc_val, now + 2) > COUNTER_HALF_SPAN) {
+			cc_val = now + 2;
+		}
+
 		event_clear(chan);
 		event_enable(chan);
 		set_comparator(chan, cc_val);
-	} else {
-		/* There is no guarantee for provided CC value to be safely
-		 * settable. Ensure it will trigger a compare event.
+		now2 = counter();
+		prev_cc = cc_val;
+		/* Rerun the algorithm if counter progressed during execution
+		 * and cc_val is in the past or one tick from now. In such
+		 * scenario, it is possible that event will not be generated.
+		 * Reruning the algorithm will delay the alarm but ensure that
+		 * event will be generated at the moment indicated by value in
+		 * CC register.
 		 */
-		uint32_t prev_cc = get_comparator(chan);
-
-		do {
-			now = counter();
-
-			/* A case when previous CC value may generate an event
-			 * is not handled here. It is handled in RTC's ISR
-			 * handler by filtering past events based on target CC
-			 * value.
-			 */
-
-			/* If requested cc_val is in the past or next tick, set
-			 * to 2 ticks from now. RTC may not generate event if CC
-			 * is set for 1 tick from now.
-			 */
-			if (counter_sub(cc_val, now + 2) > COUNTER_HALF_SPAN) {
-				cc_val = now + 2;
-			}
-
-			event_clear(chan);
-			event_enable(chan);
-			set_comparator(chan, cc_val);
-			now2 = counter();
-			prev_cc = cc_val;
-			/* Rerun the algorithm if counter progressed during
-			 * execution and cc_val is in the past or one tick from
-			 * now. In such scenario, it is possible that event will
-			 * not be generated.  Rerunning the algorithm will delay
-			 * the alarm but ensure that event will be generated at
-			 * the moment indicated by value in CC register.
-			 */
-		} while ((now2 != now) &&
-			 (counter_sub(cc_val, now2 + 2) > COUNTER_HALF_SPAN));
-	}
+	} while ((now2 != now) &&
+		 (counter_sub(cc_val, now2 + 2) > COUNTER_HALF_SPAN));
 
 	return cc_val;
 }
@@ -265,44 +256,25 @@ static int compare_set(int32_t chan, uint64_t target_time,
 	if (curr_time < target_time) {
 		if (target_time - curr_time > COUNTER_SPAN) {
 			/* Target time is too distant. */
-			ret = -EINVAL;
-		} else if (target_time != cc_data[chan].target_time) {
-			/* Target time is valid. Set CC value. */
-			bool safe_set;
-			uint32_t cc_set;
-			uint64_t set_time;
+			return -EINVAL;
+		}
 
-			safe_set = (target_time - curr_time) > MAX_LATENCY;
-			cc_set = set_absolute_alarm(chan, cc_value, safe_set);
-
-			/* Update the absolute expiration time based on
-			 * CC value that was set.
+		if (target_time != cc_data[chan].target_time) {
+			/* Target time is valid and is different than currently set.
+			 * Set CC value.
 			 */
-			set_time = (target_time & ~COUNTER_MAX) + cc_set;
+			uint32_t cc_set = set_absolute_alarm(chan, cc_value);
 
-			if (cc_value > cc_set) {
-				/* CC value was set after an overflow. Correct
-				 * target_time by a counter overflow value.
-				 */
-				set_time += COUNTER_SPAN;
-			}
-
-			cc_data[chan].callback = handler;
-			cc_data[chan].user_context = user_data;
-			cc_data[chan].target_time = set_time;
-		} else {
-			/* Provided target time was already set. */
-			cc_data[chan].callback = handler;
-			cc_data[chan].user_context = user_data;
+			target_time += counter_sub(cc_set, cc_value);
 		}
 	} else {
-		cc_data[chan].callback = handler;
-		cc_data[chan].user_context = user_data;
-		cc_data[chan].target_time = target_time;
-
-		/* Force ISR hadling when exiting from critical section. */
+		/* Force ISR handling when exiting from critical section. */
 		atomic_or(&force_isr_mask, BIT(chan));
 	}
+
+	cc_data[chan].target_time = target_time;
+	cc_data[chan].callback = handler;
+	cc_data[chan].user_context = user_data;
 
 	return ret;
 }
