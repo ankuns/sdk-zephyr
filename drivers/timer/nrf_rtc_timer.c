@@ -83,6 +83,11 @@ static void event_disable(int32_t chan)
 	nrf_rtc_event_disable(RTC, RTC_CHANNEL_INT_MASK(chan));
 }
 
+static inline bool event_is_enabled(int32_t chan)
+{
+	return RTC->EVTEN & RTC_CHANNEL_INT_MASK(chan);
+}
+
 static uint32_t counter(void)
 {
 	return nrf_rtc_counter_get(RTC);
@@ -266,7 +271,7 @@ static int compare_set(int32_t chan, uint64_t target_time,
 		if (target_time - curr_time > COUNTER_SPAN) {
 			/* Target time is too distant. */
 			ret = -EINVAL;
-		} else if (target_time != cc_data[chan].target_time) {
+		} else if ((target_time != cc_data[chan].target_time) || !event_is_enabled(chan)) {
 			/* Target time is valid. Set CC value. */
 			bool safe_set;
 			uint32_t cc_set;
