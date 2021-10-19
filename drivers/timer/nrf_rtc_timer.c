@@ -36,6 +36,7 @@ BUILD_ASSERT(CHAN_COUNT <= RTC_CH_COUNT, "Not enough compare channels");
 
 #define ANCHOR_RANGE_START (COUNTER_SPAN / 8)
 #define ANCHOR_RANGE_END (7 * COUNTER_SPAN / 8)
+#define TARGET_TIME_INVALID (UINT64_MAX)
 
 static uint32_t overflow_cnt;
 static atomic_t anchor_mutex;
@@ -302,8 +303,8 @@ void z_nrf_rtc_timer_abort(int32_t chan)
 
 	bool key = z_nrf_rtc_timer_compare_int_lock(chan);
 
+	cc_data[chan].target_time = TARGET_TIME_INVALID;
 	event_clear(chan);
-	event_disable(chan);
 	(void)atomic_and(&force_isr_mask, ~BIT(chan));
 
 	z_nrf_rtc_timer_compare_int_unlock(chan, key);
@@ -422,7 +423,6 @@ static bool channel_processing_check_and_clear(int32_t chan)
 
 		if (result) {
 			nrf_rtc_event_clear(RTC, RTC_CHANNEL_EVENT_ADDR(chan));
-			nrf_rtc_event_disable(RTC, RTC_CHANNEL_INT_MASK(chan));
 		}
 	}
 
@@ -526,6 +526,7 @@ int sys_clock_driver_init(const struct device *dev)
 	/* TODO: replace with counter driver to access RTC */
 	nrf_rtc_prescaler_set(RTC, 0);
 	for (int32_t chan = 0; chan < CHAN_COUNT; chan++) {
+		cc_data[chan].target_time = TARGET_TIME_INVALID;
 		nrf_rtc_int_enable(RTC, RTC_CHANNEL_INT_MASK(chan));
 	}
 
