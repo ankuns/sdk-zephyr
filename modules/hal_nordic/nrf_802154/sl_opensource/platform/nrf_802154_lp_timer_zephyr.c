@@ -55,7 +55,7 @@ static void timer_start_at(uint32_t channel,
 	uint64_t target_time = NRF_802154_SL_US_TO_RTC_TICKS(t0 + dt);
 	nrf_802154_sl_mcu_critical_state_t state;
 
-	z_nrf_rtc_timer_compare_set(m_rtc_channel, target_time, rtc_irq_handler, NULL);
+	z_nrf_rtc_timer_set(m_rtc_channel, target_time, rtc_irq_handler, NULL);
 
 	nrf_802154_sl_mcu_critical_enter(state);
 
