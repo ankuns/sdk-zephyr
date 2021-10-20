@@ -415,8 +415,7 @@ static bool channel_processing_check_and_clear(int32_t chan)
 			 nrf_rtc_event_check(RTC, RTC_CHANNEL_EVENT_ADDR(chan));
 
 		if (result) {
-			nrf_rtc_event_clear(RTC, RTC_CHANNEL_EVENT_ADDR(chan));
-			nrf_rtc_event_disable(RTC, RTC_CHANNEL_INT_MASK(chan));
+			event_clear(chan);
 		}
 	}
 
@@ -449,10 +448,11 @@ static void process_channel(int32_t chan)
 		 */
 		expire_time = cc_data[chan].target_time;
 		if (curr_time >= expire_time) {
-			cc_data[chan].target_time = TARGET_TIME_INVALID;
 			handler = cc_data[chan].callback;
 			user_context = cc_data[chan].user_context;
 			cc_data[chan].callback = NULL;
+			cc_data[chan].target_time = TARGET_TIME_INVALID;
+			event_disable(chan);
 		}
 
 		full_int_unlock(mcu_critical_state);
