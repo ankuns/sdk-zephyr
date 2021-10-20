@@ -132,6 +132,9 @@ bool z_nrf_rtc_timer_compare_int_lock(int32_t chan)
 
 	nrf_rtc_int_disable(RTC, RTC_CHANNEL_INT_MASK(chan));
 
+	__DMB();
+	__ISB();
+
 	return prev & BIT(chan);
 }
 
