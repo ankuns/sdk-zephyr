@@ -34,12 +34,12 @@ BUILD_ASSERT(CHAN_COUNT <= RTC_CH_COUNT, "Not enough compare channels");
 /* An arbitrary value denoting a potential preemption length in RTC ticks. */
 #define MAX_LATENCY 10U
 
+#define OVERFLOW_RISK_RANGE_END (COUNTER_SPAN / 16)
 #define ANCHOR_RANGE_START (COUNTER_SPAN / 8)
 #define ANCHOR_RANGE_END (7 * COUNTER_SPAN / 8)
 #define TARGET_TIME_INVALID (UINT64_MAX)
 
-static uint32_t overflow_cnt;
-static atomic_t anchor_mutex;
+static volatile uint32_t overflow_cnt;
 static volatile uint64_t anchor;
 static uint64_t last_count;
 
@@ -312,42 +312,28 @@ void z_nrf_rtc_timer_abort(int32_t chan)
 
 uint64_t z_nrf_rtc_timer_read(void)
 {
-	uint64_t val = (overflow_cnt << COUNTER_BIT_WIDTH);
+	uint64_t val = ((uint64_t)overflow_cnt) << COUNTER_BIT_WIDTH;
 
 	__DMB();
 
-	val += counter();
+	uint32_t cntr = counter();
 
-	/* The values of overflow counter and RTC counter have been read.
-	 * Now verify that they are valid.
-	 */
-	if (atomic_get(&anchor_mutex) == 0) {
-		/* 64-bit load and stores are not atomic. Additional variable
-		 * must be used to detect anchor update happening in the meantime.
+	val += cntr;
+
+	if (cntr < OVERFLOW_RISK_RANGE_END) {
+		/* `overflow_cnt` can have incorrect value due to still unhandled overflow or
+		 * due to possibility that this code preempted overflow interrupt before final write
+		 * of `overflow_cnt`. Update of `anchor` occurs far in time from this moment, so `anchor`
+		 * is considered valid and stable. Because of this timing there is no risk of incorrect
+		 * `anchor` value caused by non-atomic read of 64-bit `anchor`.
 		 */
-		uint64_t tmp_anchor = anchor;
-
-		__DMB();
-
-		/* If anchor has changed then this function was preempted by updating
-		 * anchor. However, anchor is only updated when we are far from
-		 * overflow, so current overflow counter is certainly valid.
-		 *
-		 * If the anchor has not changed then there's a possibility that
-		 * we are close to overflow. Detect whether overflow happened
-		 * between loading current overflow counter and RTC counter - in
-		 * that case, the anchor contains the same value of overflow counter,
-		 * but larger RTC counter (24 least significant bits), and therefore
-		 * is larger.
-		 */
-		if (anchor == tmp_anchor && val < tmp_anchor) {
+		if (val < anchor) {
+			/* Unhandled overflow, detected, let's add correction */
 			val += COUNTER_SPAN;
 		}
 	} else {
-		/* If the mutex could not be acquired, this function interrupted
-		 * storing anchor. Therefore we are far from overflow, so there's
-		 * no need to compare against anchor - current overflow counter
-		 * is certainly valid.
+		/* `overflow_cnt` is considered valid and stable in this range, no need to
+		 * check validity using `anchor`
 		 */
 	}
 
@@ -363,9 +349,12 @@ static inline bool anchor_update(uint32_t cc_value)
 {
 	/* Update anchor when far from overflow */
 	if (in_anchor_range(cc_value)) {
-		atomic_set(&anchor_mutex, 1);
-		anchor = (overflow_cnt << COUNTER_BIT_WIDTH) + cc_value;
-		atomic_set(&anchor_mutex, 0);
+		/* In this range `overflow_cnt` is considered valid and stable.
+		 * Write of 64-bit `anchor` is non atomic. However it happens
+		 * far in time from the moment the `anchor` is read in
+		 * `z_nrf_rtc_timer_read`.
+		 */
+		anchor = (((uint64_t)overflow_cnt) << COUNTER_BIT_WIDTH) + cc_value;
 		return true;
 	}
 
