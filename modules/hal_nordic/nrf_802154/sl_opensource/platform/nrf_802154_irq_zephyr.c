@@ -9,6 +9,11 @@
 #include <irq.h>
 #include <nrfx.h>
 
+void nrf_802154_irq_init_zli(uint32_t irqn, uint32_t prio, nrf_802154_isr_t isr)
+{
+	irq_connect_dynamic(irqn, prio, isr, NULL, IRQ_ZERO_LATENCY);
+}
+
 void nrf_802154_irq_init(uint32_t irqn, uint32_t prio, nrf_802154_isr_t isr)
 {
 	irq_connect_dynamic(irqn, prio, isr, NULL, 0);
