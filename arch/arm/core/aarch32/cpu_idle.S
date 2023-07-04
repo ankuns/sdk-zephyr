@@ -51,6 +51,15 @@ SECTION_FUNC(TEXT, z_arm_cpu_idle_init)
 .macro _sleep_if_allowed wait_instruction
 #if defined(CONFIG_ARM_ON_ENTER_CPU_IDLE_HOOK)
 	push	{r0, lr}
+
+	/* Let's read the lr back to r0, they should be equal */
+	ldr r0, [sp, #4]
+	cmp r0, lr
+	beq	_anku_skip_4\@
+	cpsid	i
+	b .
+_anku_skip_4\@:
+
 	bl	z_arm_on_enter_cpu_idle
 	/* Skip the wait instruction if on_enter_cpu_idle() returns false. */
 	cmp	r0, #0
