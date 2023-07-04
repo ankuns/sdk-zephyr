@@ -120,7 +120,7 @@ static bool nrf53_anomaly_160_check(void)
 
 	timestamps[current] = k_cycle_get_32();
 
-	return true;
+	return false;
 }
 
 bool z_arm_on_enter_cpu_idle(void)
