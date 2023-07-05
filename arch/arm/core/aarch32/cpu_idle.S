@@ -65,6 +65,11 @@ SECTION_FUNC(TEXT, z_arm_cpu_idle_init)
 	\wait_instruction
 
 #if defined(CONFIG_ARM_ON_ENTER_CPU_IDLE_HOOK)
+	nop
+	nop
+	nop
+	nop
+
 _skip_\@:
 #if defined(CONFIG_ARMV6_M_ARMV8_M_BASELINE)
 	pop	{r0, r1}
