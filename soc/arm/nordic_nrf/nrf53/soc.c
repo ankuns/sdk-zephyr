@@ -135,6 +135,10 @@ static bool nrf53_anomaly_160_check(void)
 }
 
 #if defined(CONFIG_SOC_NRF53_RTC_PRETICK) && defined(CONFIG_SOC_NRF5340_CPUNET)
+
+BUILD_ASSERT(!IS_ENABLED(CONFIG_WDT_NRFX),
+	     "For CONFIG_SOC_NRF53_RTC_PRETICK watchdog is used internally for the pre-tick workaround on nRF5340 cpunet. Application cannot use the watchdog.");
+
 static inline uint32_t rtc_counter_sub(uint32_t a, uint32_t b)
 {
 	return (a - b) & NRF_RTC_COUNTER_MAX;
