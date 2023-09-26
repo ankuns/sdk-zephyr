@@ -204,8 +204,18 @@ static void rtc_counter_synchronized_get(NRF_RTC_Type * rtc_a, NRF_RTC_Type * rt
 }
 #endif
 
+#if defined(CONFIG_SOC_NRF53_RTC_PRETICK) && defined(CONFIG_SOC_NRF5340_CPUNET)
+uint32_t g_pretick_workaround_max_cycles = 0;
+uint32_t g_z_arm_on_enter_cpu_idle_max_cycles = 0;
+#endif
+
 bool z_arm_on_enter_cpu_idle(void)
 {
+#if defined(CONFIG_SOC_NRF53_RTC_PRETICK) && defined(CONFIG_SOC_NRF5340_CPUNET)
+	uint32_t cyc_delta;
+	uint32_t cyc_start = DWT->CYCCNT;
+#endif
+
 	bool ok_to_sleep = nrf53_anomaly_160_check();
 
 #if (LOG_LEVEL >= LOG_LEVEL_DBG)
@@ -219,6 +229,7 @@ bool z_arm_on_enter_cpu_idle(void)
 	}
 #endif
 #if defined(CONFIG_SOC_NRF53_RTC_PRETICK) && defined(CONFIG_SOC_NRF5340_CPUNET)
+	uint32_t pretick_cyc_start = DWT->CYCCNT;
 	if (ok_to_sleep) {
 		uint32_t rtc_counter = 0U;
 		uint32_t rtc_ticks_to_next_event = 0U;
@@ -299,6 +310,20 @@ bool z_arm_on_enter_cpu_idle(void)
 				NRF_WDT->TASKS_START = 1;
 			}
 		}
+	}
+	uint32_t pretick_cyc_end = DWT->CYCCNT;
+	cyc_delta = pretick_cyc_end - pretick_cyc_start;
+	if (cyc_delta > g_pretick_workaround_max_cycles) {
+		g_pretick_workaround_max_cycles = cyc_delta;
+	}
+#endif
+
+#if defined(CONFIG_SOC_NRF53_RTC_PRETICK) && defined(CONFIG_SOC_NRF5340_CPUNET)
+	uint32_t cyc_end = DWT->CYCCNT;
+	cyc_delta = cyc_end - cyc_start;
+
+	if (cyc_delta > g_z_arm_on_enter_cpu_idle_max_cycles) {
+		g_z_arm_on_enter_cpu_idle_max_cycles = cyc_delta;
 	}
 #endif
 
@@ -395,6 +420,10 @@ static int rtc_pretick_cpunet_init(void)
 
 	nrf_rtc_event_enable(NRF_RTC1, NRF_RTC_CHANNEL_INT_MASK(RTC1_PRETICK_CC_CHAN));
 	nrf_rtc_event_clear(NRF_RTC1, NRF_RTC_CHANNEL_EVENT_ADDR(RTC1_PRETICK_CC_CHAN));
+
+
+	CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+	DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 
 	return 0;
 }
