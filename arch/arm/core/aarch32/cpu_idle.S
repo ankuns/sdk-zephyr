@@ -96,6 +96,12 @@ SECTION_FUNC(TEXT, arch_cpu_idle)
 #endif /* CONFIG_ARMV6_M_ARMV8_M_BASELINE */
 #endif /* CONFIG_TRACING */
 
+#if defined(CONFIG_ARM_ON_ENTER_CPU_IDLE_PREPARE_HOOK)
+	push	{r0, lr}
+	bl	z_arm_on_enter_cpu_idle_prepare
+	pop	{r0, lr}
+#endif
+
 #if defined(CONFIG_ARMV7_M_ARMV8_M_MAINLINE)
 	/*
 	 * PRIMASK is always cleared on ARMv7-M and ARMv8-M Mainline (not used
@@ -149,6 +155,11 @@ SECTION_FUNC(TEXT, arch_cpu_atomic_idle)
 #endif /* CONFIG_ARMV6_M_ARMV8_M_BASELINE */
 #endif /* CONFIG_TRACING */
 
+#if defined(CONFIG_ARM_ON_ENTER_CPU_IDLE_PREPARE_HOOK)
+	push	{r0, lr}
+	bl	z_arm_on_enter_cpu_idle_prepare
+	pop	{r0, lr}
+#endif
 	/*
 	 * Lock PRIMASK while sleeping: wfe will still get interrupted by
 	 * incoming interrupts but the CPU will not service them right away.
