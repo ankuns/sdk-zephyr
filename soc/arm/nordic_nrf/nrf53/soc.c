@@ -204,86 +204,90 @@ static void rtc_counter_synchronized_get(NRF_RTC_Type * rtc_a, NRF_RTC_Type * rt
 }
 #endif
 
-bool z_arm_on_enter_cpu_idle(void)
-{
-	bool ok_to_sleep = nrf53_anomaly_160_check();
-
-#if (LOG_LEVEL >= LOG_LEVEL_DBG)
-	static bool suppress_message;
-
-	if (ok_to_sleep) {
-		suppress_message = false;
-	} else if (!suppress_message) {
-		LOG_DBG("Anomaly 160 trigger conditions detected.");
-		suppress_message = true;
-	}
-#endif
 #if defined(CONFIG_SOC_NRF53_RTC_PRETICK) && defined(CONFIG_SOC_NRF5340_CPUNET)
-	if (ok_to_sleep) {
-		uint32_t rtc_counter = 0U;
-		uint32_t rtc_ticks_to_next_event = 0U;
-		uint32_t rtc0_counter = 0U;
-		uint32_t rtc0_ticks_to_next_event = 0U;
+static uint8_t cpu_idle_prepare_preempted_helper;
+static bool z_arm_on_enter_cpu_idle_prepare_allows_sleep;
 
-		rtc_counter_synchronized_get(NRF_RTC1, NRF_RTC0, &rtc_counter, &rtc0_counter);
+static void cpu_idle_prepare_preempted_monitor_begin(void)
+{
+	__LDREXB(&cpu_idle_prepare_preempted_helper);
+}
 
-		bool rtc_scheduled = rtc_ticks_to_next_event_get(NRF_RTC1, RTC1_PRETICK_SELECTED_CC_MASK, rtc_counter, &rtc_ticks_to_next_event);
+/* Returns 0 if no exception preempted code since call to cpu_idle_prepare_preempted_monitor_begin. */
+static bool cpu_idle_prepare_preempted_monitor_end(void)
+{
+	return __STREXB(0U, &cpu_idle_prepare_preempted_helper);
+}
 
-		if (rtc_ticks_to_next_event_get(NRF_RTC0, RTC0_PRETICK_SELECTED_CC_MASK, rtc0_counter, &rtc0_ticks_to_next_event)) {
-			/* An event is scheduled on RTC0. */
-			if (!rtc_scheduled) {
-				rtc_ticks_to_next_event = rtc0_ticks_to_next_event;
-				rtc_scheduled = true;
-			} else if (rtc0_ticks_to_next_event < rtc_ticks_to_next_event) {
-				rtc_ticks_to_next_event = rtc0_ticks_to_next_event;
-			}
-			else {
-				/* Event on RTC0 will not happen earlier than already found earliest event. */
-			}
+void z_arm_on_enter_cpu_idle_prepare(void)
+{
+	bool ok_to_sleep = true;
+
+	cpu_idle_prepare_preempted_monitor_begin();
+
+	uint32_t rtc_counter = 0U;
+	uint32_t rtc_ticks_to_next_event = 0U;
+	uint32_t rtc0_counter = 0U;
+	uint32_t rtc0_ticks_to_next_event = 0U;
+
+	rtc_counter_synchronized_get(NRF_RTC1, NRF_RTC0, &rtc_counter, &rtc0_counter);
+
+	bool rtc_scheduled = rtc_ticks_to_next_event_get(NRF_RTC1, RTC1_PRETICK_SELECTED_CC_MASK, rtc_counter, &rtc_ticks_to_next_event);
+
+	if (rtc_ticks_to_next_event_get(NRF_RTC0, RTC0_PRETICK_SELECTED_CC_MASK, rtc0_counter, &rtc0_ticks_to_next_event)) {
+		/* An event is scheduled on RTC0. */
+		if (!rtc_scheduled) {
+			rtc_ticks_to_next_event = rtc0_ticks_to_next_event;
+			rtc_scheduled = true;
+		} else if (rtc0_ticks_to_next_event < rtc_ticks_to_next_event) {
+			rtc_ticks_to_next_event = rtc0_ticks_to_next_event;
 		}
+		else {
+			/* Event on RTC0 will not happen earlier than already found earliest event. */
+		}
+	}
 
-		if (rtc_scheduled) {
-			static bool rtc_pretick_cc_set_on_time = false;
-			/* The pretick should happen 1 tick before the earliest scheduled event that can trigger an interupt. */
-			uint32_t rtc_pretick_cc_val = (rtc_counter + rtc_ticks_to_next_event - 1U) & NRF_RTC_COUNTER_MAX;
+	if (rtc_scheduled) {
+		static bool rtc_pretick_cc_set_on_time = false;
+		/* The pretick should happen 1 tick before the earliest scheduled event that can trigger an interupt. */
+		uint32_t rtc_pretick_cc_val = (rtc_counter + rtc_ticks_to_next_event - 1U) & NRF_RTC_COUNTER_MAX;
 
-			if (rtc_pretick_cc_val != nrf_rtc_cc_get(NRF_RTC1, RTC1_PRETICK_CC_CHAN)) {
-				/* The CC for pretick needs to be updated. */
-				nrf_rtc_cc_set(NRF_RTC1, RTC1_PRETICK_CC_CHAN, rtc_pretick_cc_val);
+		if (rtc_pretick_cc_val != nrf_rtc_cc_get(NRF_RTC1, RTC1_PRETICK_CC_CHAN)) {
+			/* The CC for pretick needs to be updated. */
+			nrf_rtc_cc_set(NRF_RTC1, RTC1_PRETICK_CC_CHAN, rtc_pretick_cc_val);
 
-				if (rtc_ticks_to_next_event >= NRF_RTC_COUNTER_MAX/2) {
-					/* Pretick is scheduled so far in the future, assume we're on time. */
-					rtc_pretick_cc_set_on_time = true;
-				} else {
-					/* Let's check if we updated CC on time so that the CC can take effect. */
-					barrier_dmem_fence_full();
-					rtc_counter = nrf_rtc_counter_get(NRF_RTC1);
-					uint32_t pretick_cc_to_counter = rtc_counter_sub(rtc_pretick_cc_val, rtc_counter);
-
-					if ( (pretick_cc_to_counter < 3) || (pretick_cc_to_counter >= NRF_RTC_COUNTER_MAX/2) ) {
-						/* The COUNTER value is close enough to the expected pretick CC
-						 * or has just expired, so the pretick event generation is not guaranteed.
-						 */
-						rtc_pretick_cc_set_on_time = false;
-					} else {
-						/* The written rtc_pretick_cc is guaranteed to to trigger compare event. */
-						rtc_pretick_cc_set_on_time = true;
-					}
-				}
+			if (rtc_ticks_to_next_event >= NRF_RTC_COUNTER_MAX/2) {
+				/* Pretick is scheduled so far in the future, assume we're on time. */
+				rtc_pretick_cc_set_on_time = true;
 			} else {
-				/* The CC for pretick doesn't need to be updated, however
-				* rtc_pretick_cc_set_on_time still holds if we managed to set it on time.
-				*/
-			}
+				/* Let's check if we updated CC on time so that the CC can take effect. */
+				barrier_dmem_fence_full();
+				rtc_counter = nrf_rtc_counter_get(NRF_RTC1);
+				uint32_t pretick_cc_to_counter = rtc_counter_sub(rtc_pretick_cc_val, rtc_counter);
 
-			/* If the CC for pretick is set on time, so the pretick CC event can be reliably generated
-			* then allow to sleep. Otherwise (the CC for pretick cannot be reliably generated, because
-			* CC was set very short to it's fire time) sleep not at all.
-			*/
-			ok_to_sleep = rtc_pretick_cc_set_on_time;
+				if ( (pretick_cc_to_counter < 3) || (pretick_cc_to_counter >= NRF_RTC_COUNTER_MAX/2) ) {
+					/* The COUNTER value is close enough to the expected pretick CC
+						* or has just expired, so the pretick event generation is not guaranteed.
+						*/
+					rtc_pretick_cc_set_on_time = false;
+				} else {
+					/* The written rtc_pretick_cc is guaranteed to to trigger compare event. */
+					rtc_pretick_cc_set_on_time = true;
+				}
+			}
 		} else {
-			/* No events on any RTC timers are scheduled. */
+			/* The CC for pretick doesn't need to be updated, however
+			* rtc_pretick_cc_set_on_time still holds if we managed to set it on time.
+			*/
 		}
+
+		/* If the CC for pretick is set on time, so the pretick CC event can be reliably generated
+		* then allow to sleep. Otherwise (the CC for pretick cannot be reliably generated, because
+		* CC was set very short to it's fire time) sleep not at all.
+		*/
+		ok_to_sleep = rtc_pretick_cc_set_on_time;
+	} else {
+		/* No events on any RTC timers are scheduled. */
 	}
 
 	if (ok_to_sleep) {
@@ -299,6 +303,52 @@ bool z_arm_on_enter_cpu_idle(void)
 				NRF_WDT->TASKS_START = 1;
 			}
 		}
+	}
+
+	z_arm_on_enter_cpu_idle_prepare_allows_sleep = ok_to_sleep;
+}
+#endif
+
+bool z_arm_on_enter_cpu_idle(void)
+{
+	bool ok_to_sleep = true;
+
+#if defined(CONFIG_SOC_NRF53_RTC_PRETICK) && defined(CONFIG_SOC_NRF5340_CPUNET)
+	if (cpu_idle_prepare_preempted_monitor_end() == 0) {
+		/* No exception happened since cpu_idle_prepare_preempted_monitor_begin.
+		 * We can trust the outcome of. z_arm_on_enter_cpu_idle_prepare
+		 */
+		ok_to_sleep = z_arm_on_enter_cpu_idle_prepare_allows_sleep;
+	} else {
+		/* Exception happened since cpu_idle_prepare_preempted_monitor_begin.
+		 * The values which z_arm_on_enter_cpu_idle_prepare could be changed
+		 * by the exception, so we can not trust to it's outcome.
+		 * Do not sleep at all, let's try in the next iteration of idle loop.
+		 */
+		ok_to_sleep = false;
+	}
+#endif
+
+	if (ok_to_sleep) {
+		ok_to_sleep = nrf53_anomaly_160_check();
+
+	#if (LOG_LEVEL >= LOG_LEVEL_DBG)
+		static bool suppress_message;
+
+		if (ok_to_sleep) {
+			suppress_message = false;
+		} else if (!suppress_message) {
+			LOG_DBG("Anomaly 160 trigger conditions detected.");
+			suppress_message = true;
+		}
+	#endif
+	}
+
+#if defined(CONFIG_SOC_NRF53_RTC_PRETICK) && defined(CONFIG_SOC_NRF5340_CPUNET)
+	if (!ok_to_sleep) {
+		NRF_IPC->PUBLISH_RECEIVE[CONFIG_SOC_NRF53_RTC_PRETICK_IPC_CH_TO_NET] &=
+			~IPC_PUBLISH_RECEIVE_EN_Msk;
+		NRF_WDT->TASKS_STOP = 1;
 	}
 #endif
 

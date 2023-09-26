@@ -52,6 +52,8 @@ config SOC_NRF53_ANOMALY_160_WORKAROUND
 config SOC_NRF53_RTC_PRETICK
 	bool "Pre-tick workaround for nRF5340 anomaly 165"
 	select NRFX_DPPI
+	select ARM_ON_ENTER_CPU_IDLE_HOOK if SOC_NRF5340_CPUNET
+	select ARM_ON_ENTER_CPU_IDLE_PREPARE_HOOK if SOC_NRF5340_CPUNET
 	help
 	  Indicates that the pre-tick workaround for the anomaly 165 that affects
 	  the nRF5340 SoC should be applied.
