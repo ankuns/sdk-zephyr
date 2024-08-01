@@ -7,6 +7,7 @@ zephyr_interface_library_named(zephyr-802154-interface)
 if (CONFIG_NRF_802154_RADIO_DRIVER)
   target_sources(nrf-802154-platform
     PRIVATE
+      nrf_802154_init_zephyr.c
       radio/platform/nrf_802154_random_zephyr.c
       sl_opensource/platform/nrf_802154_clock_zephyr.c
       sl_opensource/platform/nrf_802154_irq_zephyr.c
